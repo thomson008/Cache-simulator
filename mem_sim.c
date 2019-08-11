@@ -381,10 +381,13 @@ int main(int argc, char** argv) {
         switch(replacement_policy) {
           case FIFO:
             fifoPolicy(tag, index, theSet);
+            break;
           case Random:
             randomPolicy(tag, index, theSet);
+            break;
           case LRU:
             LRUPolicy(tag, index, theSet);
+            break;
         }
     }
 
