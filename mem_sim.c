@@ -197,6 +197,8 @@ void randomPolicy(uint32_t tag, uint32_t index, Set theSet) {
 }
 
 void LRUPolicy(uint32_t tag, uint32_t index, Set theSet) {
+  found = 0;
+  
   for (i = 0; i < n_of_blocks; i++) {
     if (theSet.blocks[i].valid_bit) {
       if (theSet.blocks[i].tag == tag) {
