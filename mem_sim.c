@@ -136,6 +136,119 @@ uint32_t getIndex(mem_access_t access) {
   return (((1 << g_cache_index_bits) - 1) & (address >> (g_cache_offset_bits)));
 }
 
+int found;
+int* FIFO_loc = (int*) malloc(n_of_sets * sizeof(int));
+uint32_t n_of_sets;
+uint32_t n_of_blocks;
+
+void fifoPolicy(uint32_t tag, uint32_t index, Set theSet) {
+  found = 0;
+
+  int where = FIFO_loc[index];
+
+  for (i = 0; i < n_of_blocks; i++) {
+    if (theSet.blocks[i].valid_bit) {                                   //check if the block is used
+      if (theSet.blocks[i].tag == tag) {                                //see if the tags match
+        found++;                                                        //if they match, set found to 1
+        g_result.cache_hits++;                                          //update statistic for hits
+        break;
+      }
+    }
+  }
+
+  if (found == 0) {                                                     //if matching tag wasn't found:
+    theSet.blocks[where].tag = tag;                                     //put the tag in a block
+    theSet.blocks[where].valid_bit = 1;                                 //update the valid bit so it is known that the block is used
+    where = (where + 1) % n_of_blocks;                                  //calculate the location for next tag
+    g_result.cache_misses++;                                            //update stats for misses
+    FIFO_loc[index] = where;                                            //put the new location in the appropriate index in locations array
+  }
+}
+
+void randomPolicy(uint32_t tag, uint32_t index, Set theSet) {
+  found = 0;
+
+  for (i = 0; i < n_of_blocks; i++) {
+    if (theSet.blocks[i].valid_bit) {
+      if (theSet.blocks[i].tag == tag) {
+        found++;
+        g_result.cache_hits++;
+        break;
+      }
+    }
+  }
+
+  if (found == 0) {
+    g_result.cache_misses++;
+    int found_empty = 0;
+    for (i = 0; i < n_of_blocks; i++) {                                 //in case of a miss, check if there is any empty block available
+      if (!theSet.blocks[i].valid_bit) {                                //if yes, put the tag in that block
+        theSet.blocks[i].tag = tag;
+        theSet.blocks[i].valid_bit = 1;                                 //set valid bit to 1 for that block
+        found_empty++;                                                  //indicate that empty block was found
+        break;
+      }
+    }
+    if (!found_empty) {                                                 //if it wasn't found
+        int where = rand() % n_of_blocks;                               //randomly choose a block to replace
+        theSet.blocks[where].tag = tag;                                 //put the tag in there
+    }
+  }
+}
+
+void LRUPolicy(uint32_t tag, uint32_t index, Set theSet) {
+  for (i = 0; i < n_of_blocks; i++) {
+    if (theSet.blocks[i].valid_bit) {
+      if (theSet.blocks[i].tag == tag) {
+        found++;
+        g_result.cache_hits++;
+        for (j = 0; j < n_of_blocks; j++) {                             //update the access_time for all blocks that have been already accessed
+          if (theSet.blocks[j].valid_bit) theSet.blocks[j].access_time++;
+        }
+        theSet.blocks[i].access_time = 0;                               //set access time for the current block
+        break;
+      }
+    }
+  }
+
+  if (found == 0) {                                                     //in case of a miss
+    g_result.cache_misses++;                                            //update miss counter
+    int found_empty = 0;
+    for (i = 0; i < n_of_blocks; i++) {                                 //look for empty block
+      if(!theSet.blocks[i].valid_bit) {
+        theSet.blocks[i].tag = tag;                                     //if found, put the tag there
+        theSet.blocks[i].valid_bit = 1;
+        for (j = 0; j < n_of_blocks; j++) {                             //update access_time for all used blocks
+          if (theSet.blocks[j].valid_bit)
+            theSet.blocks[j].access_time++;
+        }
+        theSet.blocks[i].access_time = 0;                               //set access_time for the current block to 0
+        found_empty++;                                                  //indicate that an empty block was found
+        break;
+      }
+    }
+
+    if (found_empty == 0) {                                             //if it wasn't, find the block to replace
+      uint32_t max_access = 0;
+      uint32_t oldestIdx = 0;
+      for (i = 0; i < n_of_blocks; i++) {                               //find the max access time
+        if (theSet.blocks[i].access_time > max_access) {
+          max_access = theSet.blocks[i].access_time;
+          oldestIdx = i;
+        }
+      }
+
+      for (j = 0; j < n_of_blocks; j++) {                               //update access_time for all used blocks
+        if (theSet.blocks[j].valid_bit)
+          theSet.blocks[j].access_time++;
+      }
+
+      theSet.blocks[oldestIdx].tag = tag;                               //put the tag in a selected block
+      theSet.blocks[oldestIdx].access_time = 0;                         //set it as most recently used
+    }
+  }
+}
+
 
 int main(int argc, char** argv) {
     time_t t;
@@ -220,8 +333,8 @@ int main(int argc, char** argv) {
       Set*  sets;
     } Cache;
 
-    uint32_t n_of_sets = number_of_cache_blocks / associativity;
-    uint32_t n_of_blocks = associativity;
+    n_of_sets = number_of_cache_blocks / associativity;
+    n_of_blocks = associativity;
 
     //dynamic allocation of space for an array of sets
     Cache cache;
@@ -248,8 +361,6 @@ int main(int argc, char** argv) {
     g_cache_offset_bits = getOffsetBits(cache_block_size);
     g_num_cache_tag_bits = getTagBits(g_cache_offset_bits, g_cache_index_bits);
 
-    int* FIFO_loc = (int*) malloc(n_of_sets * sizeof(int));
-
     for (i = 0; i < n_of_sets; i++) {
       FIFO_loc[i] = 0;
     }
@@ -265,114 +376,17 @@ int main(int argc, char** argv) {
         /* Add your code here */
         uint32_t tag = getTag(access);
         uint32_t index = getIndex(access);
-
         Set theSet = cache.sets[index];
-        int found = 0;
 
-/*============================================================================*/
-        if (replacement_policy == FIFO) {
-          int where = FIFO_loc[index];
-          for (i = 0; i < n_of_blocks; i++) {
-            if (theSet.blocks[i].valid_bit == 1) {                              //check if the block is used
-              if (theSet.blocks[i].tag == tag) {                                //see if the tags match
-                found++;                                                        //if they match, set found to 1
-                g_result.cache_hits++;                                          //update statistic for hits
-                break;
-              }
-            }
-          }
-
-          if (found == 0) {                                                     //if matching tag wasn't found:
-            theSet.blocks[where].tag = tag;                                     //put the tag in a block
-            theSet.blocks[where].valid_bit = 1;                                 //update the valid bit so it is known that the block is used
-            where = (where + 1) % n_of_blocks;                                  //calculate the location for next tag
-            g_result.cache_misses++;                                            //update stats for misses
-            FIFO_loc[index] = where;                                            //put the new location in the appropriate index in locations array
-          }
+        switch(replacement_policy) {
+          case FIFO:
+            fifoPolicy(tag, index, theSet);
+          case Random:
+            randomPolicy(tag, index, theSet);
+          case LRU:
+            LRUPolicy(tag, index, theSet);
         }
-/*============================================================================*/
-        else if (replacement_policy == Random) {
-          for (i = 0; i < n_of_blocks; i++) {
-            if (theSet.blocks[i].valid_bit == 1) {
-              if (theSet.blocks[i].tag == tag) {
-                found++;
-                g_result.cache_hits++;
-                break;
-              }
-            }
-          }
-
-          if (found == 0) {
-            g_result.cache_misses++;
-            int found_empty = 0;
-            for (i = 0; i < n_of_blocks; i++) {                                 //in case of a miss, check if there is any empty block available
-              if (theSet.blocks[i].valid_bit == 0) {                            //if yes, put the tag in that block
-                theSet.blocks[i].tag = tag;
-                theSet.blocks[i].valid_bit = 1;                                 //set valid bit to 1 for that block
-                found_empty++;                                                  //indicate that empty block was found
-                break;
-              }
-            }
-            if (found_empty == 0) {                                             //if it wasn't found
-                int where = rand() % n_of_blocks;                               //randomly choose a block to replace
-                theSet.blocks[where].tag = tag;                                 //put the tag in there
-            }
-          }
-        }
-/*============================================================================*/
-        else if (replacement_policy == LRU) {
-          for (i = 0; i < n_of_blocks; i++) {
-            if (theSet.blocks[i].valid_bit == 1) {
-              if (theSet.blocks[i].tag == tag) {
-                found++;
-                g_result.cache_hits++;
-                for (j = 0; j < n_of_blocks; j++) {                             //update the access_time for all blocks that have been already accessed
-                  if (theSet.blocks[j].valid_bit == 1) theSet.blocks[j].access_time++;
-                }
-                theSet.blocks[i].access_time = 0;                               //set access time for the current block
-                break;
-              }
-            }
-          }
-
-          if (found == 0) {                                                     //in case of a miss
-            g_result.cache_misses++;                                            //update miss counter
-            int found_empty = 0;
-            for (i = 0; i < n_of_blocks; i++) {                                 //look for empty block
-              if(theSet.blocks[i].valid_bit == 0) {
-                theSet.blocks[i].tag = tag;                                     //if found, put the tag there
-                theSet.blocks[i].valid_bit = 1;
-                for (j = 0; j < n_of_blocks; j++) {                             //update access_time for all used blocks
-                  if (theSet.blocks[j].valid_bit == 1) theSet.blocks[j].access_time++;
-                }
-                theSet.blocks[i].access_time = 0;                               //set access_time for the current block to 0
-                found_empty++;                                                  //indicate that an empty block was found
-                break;
-              }
-            }
-
-            if (found_empty == 0) {                                             //if it wasn't, find the block to replace
-              uint32_t max_access = 0;
-              uint32_t oldestIdx = 0;
-              for (i = 0; i < n_of_blocks; i++) {                               //find the max access time
-                if (theSet.blocks[i].access_time > max_access) {
-                  max_access = theSet.blocks[i].access_time;
-                  oldestIdx = i;
-                }
-              }
-
-              for (j = 0; j < n_of_blocks; j++) {                               //update access_time for all used blocks
-                if (theSet.blocks[j].valid_bit == 1) theSet.blocks[j].access_time++;
-              }
-
-              theSet.blocks[oldestIdx].tag = tag;                               //put the tag in a selected block
-              theSet.blocks[oldestIdx].access_time = 0;                         //set it as most recently used
-            }
-          }
-
-        }
-/*============================================================================*/
-  }
+    }
 
     for (i = 0; i < n_of_sets; i++) {
       free(cache.sets[i].blocks);
